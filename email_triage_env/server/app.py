@@ -16,7 +16,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, RedirectResponse
 from pydantic import BaseModel, Field
@@ -290,7 +290,7 @@ def health_check():
 
 
 @app.post("/reset")
-def reset_episode(req: ResetRequest):
+def reset_episode(req: ResetRequest = Body(default_factory=ResetRequest)):
     global _episode
     if req.difficulty not in VALID_OPTIONS["difficulties"]:
         raise HTTPException(
