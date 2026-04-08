@@ -1,43 +1,46 @@
 ---
-title: Email Triage Server
+title: Email Triage OpenEnv
 emoji: 📧
 colorFrom: blue
 colorTo: indigo
 sdk: docker
-app_port: 8000
+app_port: 7860
 pinned: false
 ---
 
-# Email Triage OpenEnv Environment v2.0
+# Email Triage OpenEnv Environment
 
-Meta PyTorch OpenEnv Hackathon x Scaler School of Technology submission.
+OpenEnv-compatible environment for training and evaluating agents on enterprise inbox triage.
 
-This project simulates a real enterprise workflow: triaging inbound emails for spam, business intent, urgency, ownership team, and the best response template. It is designed for agent learning and evaluation with deterministic tasks, graded rewards, and a standard reset/step/state interface.
+Agents must classify each email over five dimensions:
 
-## Why this environment
+- spam or not spam
+- intent category
+- priority level
+- routing department
+- response template
 
-Email triage is a high-impact, real-world automation problem seen in support, finance, HR, legal, and sales operations. Unlike toy tasks, this environment includes ambiguity, adversarial messages, constrained actions, and partial-information tradeoffs that force agents to make practical decisions.
+## Environment Description
 
-## OpenEnv compliance
+This environment follows a deterministic RL-style loop:
 
-This repository includes:
+1. `POST /reset` with episode settings.
+2. Read the current observation (email).
+3. Send an action with 5-field classification.
+4. Receive reward and transition until episode completion.
 
-- typed Pydantic models for Observation, Action, Reward
-- canonical API: reset(), step(), state()
-- deterministic benchmark tasks: easy, medium, hard
-- openenv.yaml metadata and schema definitions
-- baseline inference.py at repository root
+Difficulty modes:
 
-Core files:
+- easy
+- medium
+- hard
+- mixed
 
-- [email_triage_env/server/app.py](email_triage_env/server/app.py)
-- [email_triage_env/openenv_env.py](email_triage_env/openenv_env.py)
-- [openenv.yaml](openenv.yaml)
-- [inference.py](inference.py)
+Partial information mode can hide the email body (`body_hidden=true`) until the agent calls `POST /tools/reveal_body`. Each reveal applies a reward penalty.
 
-## Observation space
+## Observation Space
 
-Each step returns one email observation:
+Each step observation is one email object:
 
 ```json
 {
@@ -50,11 +53,14 @@ Each step returns one email observation:
 }
 ```
 
-In partial-info mode, `body` is hidden until `reveal_body` is called.
+Notes:
 
-## Action space
+- `body_hidden=true` means body text is masked in the current step.
+- Use `POST /tools/reveal_body` to reveal the body (with penalty).
 
-Agent action is a 5-field classification object:
+## Action Space
+
+Action payload for each step:
 
 ```json
 {
@@ -66,46 +72,30 @@ Agent action is a 5-field classification object:
 }
 ```
 
-## Reward function
+## Reward Model
 
-Per-step reward is clamped to [0.0, 1.0].
+Step reward is bounded in `[0.0, 1.0]`.
 
-- weighted correctness:
-  - is_spam: 0.30
-  - category: 0.20
-  - priority: 0.20
-  - department: 0.15
-  - response_template: 0.15
-- partial-info penalty:
-  - reveal_body: -0.05 per email when used
-- difficulty bonus (if base >= 0.7):
-  - easy: +0.00
-  - medium: +0.10
-  - hard: +0.20
-  - mixed: +0.05
+Weighted base score:
 
-This gives dense trajectory feedback while discouraging unnecessary reveals.
+- `is_spam`: `0.30`
+- `category`: `0.20`
+- `priority`: `0.20`
+- `department`: `0.15`
+- `response_template`: `0.15`
 
-## Benchmark tasks and graders
+Adjustments:
 
-Deterministic tasks with fixed seeds and scoring in [0.0, 1.0]:
+- reveal penalty: `-0.05` per reveal on current email
+- difficulty bonus (if base score is at least `0.7`):
+- easy: `+0.00`
+- medium: `+0.10`
+- hard: `+0.20`
+- mixed: `+0.05`
 
-1. `email_triage_easy_v1`
-2. `email_triage_medium_v1`
-3. `email_triage_hard_v1`
+## API Endpoints
 
-All tasks are exposed through [email_triage_env/server/app.py](email_triage_env/server/app.py) and [openenv.yaml](openenv.yaml). Grading is deterministic because dataset sampling is seed-controlled and reward computation is purely programmatic.
-
-Dataset sizes:
-
-- easy: 8 emails
-- medium: 7 emails
-- hard: 7 emails
-- total unique emails: 22
-
-## API and tools
-
-Core endpoints:
+Core:
 
 - `POST /reset`
 - `POST /step`
@@ -113,7 +103,7 @@ Core endpoints:
 - `GET /tasks`
 - `GET /health`
 
-MCP tool endpoints:
+Tools:
 
 - `POST /tools/get_current_email`
 - `POST /tools/reveal_body`
@@ -122,99 +112,115 @@ MCP tool endpoints:
 - `POST /tools/get_episode_statistics`
 - `POST /tools/get_leaderboard`
 
-## Setup
+UI:
 
-1. Install dependencies.
+- `GET /dashboard`
+- `GET /docs`
+
+## Local Setup
+
+### 1) Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Run the environment server.
+### 2) Run server
 
 ```bash
-python main.py
+python main.py --host 0.0.0.0 --port 8000
 ```
 
-3. Useful local URLs.
+### 3) Verify
 
-- dashboard: http://localhost:8000/dashboard
-- docs: http://localhost:8000/docs
-- health: http://localhost:8000/health
+- Dashboard: `http://localhost:8000/dashboard`
+- OpenAPI docs: `http://localhost:8000/docs`
+- Health: `http://localhost:8000/health`
 
-## Baseline inference script (required)
+## Docker (Local)
 
-Run [inference.py](inference.py) from repository root.
+Build image:
 
-Required environment variables:
+```bash
+docker build -t email-triage-openenv .
+```
 
-- `API_BASE_URL`: OpenAI-compatible endpoint
-- `MODEL_NAME`: model identifier
-- `HF_TOKEN`: Hugging Face/API token required by submission infra
-- `OPENAI_API_KEY`: OpenAI client API key
+Run container:
 
-Optional environment variable:
+```bash
+docker run --rm -e PORT=8000 -p 8000:8000 email-triage-openenv
+```
 
-- `ENV_BASE_URL` (default: `http://localhost:8000`)
+Check health:
 
-Run command:
+```bash
+curl http://localhost:8000/health
+```
+
+## Deploy to Hugging Face Spaces (Docker)
+
+### 1) Create Space
+
+- Create a new Hugging Face Space.
+- Select `Docker` as SDK.
+
+### 2) Push repository
+
+Include at minimum:
+
+- `Dockerfile`
+- `README.md`
+- `requirements.txt`
+- environment source code
+
+The README frontmatter is configured for Spaces:
+
+- `sdk: docker`
+- `app_port: 7860`
+
+### 3) Runtime behavior
+
+Container command:
+
+```bash
+uvicorn email_triage_env.server.app:app --host ${HOST} --port ${PORT}
+```
+
+Defaults in Dockerfile:
+
+- `HOST=0.0.0.0`
+- `PORT=7860`
+
+Spaces can inject its own `PORT`; the container respects it.
+
+### 4) Post-deploy checks
+
+- `/health` returns `{"status":"ok"}`.
+- `/docs` is reachable.
+- `/` redirects to `/dashboard`.
+
+## Baseline Inference
+
+Run after server startup:
 
 ```bash
 python inference.py
 ```
 
-Structured stdout format emitted by inference:
+Required environment variables:
 
-- `[START] task=... env=... model=...`
-- `[STEP] step=... action=... reward=... done=... error=...`
-- `[END] success=... steps=... score=... rewards=[...]`
+- `API_BASE_URL`
+- `MODEL_NAME`
+- `HF_TOKEN`
+- `OPENAI_API_KEY`
 
-## Baseline reproducibility
+Optional:
 
-- task order is fixed: easy -> medium -> hard
-- each task uses fixed seed: 101, 202, 303
-- temperature is fixed to 0 for model calls
-- fallback policy is deterministic when model output is invalid
+- `ENV_BASE_URL` (default `http://localhost:8000`)
 
-## Baseline scores
+## Project Artifacts
 
-The script computes a score per task and reports it in each `[END]` record. The final reproducible baseline is the mean of the three task scores.
-
-## Docker and Hugging Face Spaces
-
-Build and run:
-
-```bash
-docker build -t email-triage-env .
-docker run -p 8000:8000 email-triage-env
-```
-
-This repo is configured as a Docker Space with the frontmatter in this README. Tag the Space with `openenv` before submission.
-
-## Pre-submission validation checklist
-
-1. Docker builds and server responds on `/health`.
-2. `openenv validate` passes from repository root.
-3. [inference.py](inference.py) runs with required env vars and emits strict logs.
-4. All three tasks produce deterministic scores in [0.0, 1.0].
-5. Total inference runtime is under 20 minutes on 2 vCPU, 8 GB RAM.
-
-## Project structure
-
-```text
-email_triage_env/
-  __init__.py
-  client.py
-  emails.py
-  openenv_env.py
-  server/
-    __init__.py
-    app.py
-main.py
-demo.py
-inference.py
-openenv.yaml
-requirements.txt
-Dockerfile
-README.md
-```
+- `openenv.yaml`: environment metadata and API schemas
+- `inference.py`: baseline evaluator
+- `email_triage_env/server/app.py`: FastAPI server
+- `email_triage_env/openenv_env.py`: environment implementation
