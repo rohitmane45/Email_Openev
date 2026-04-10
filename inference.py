@@ -234,15 +234,42 @@ def main() -> None:
     api_key = require_env("OPENAI_API_KEY")
 
     env_base = os.getenv("ENV_BASE_URL", "http://localhost:8000")
-    client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=5.0, max_retries=0)
+    
+    try:
+        client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=5.0, max_retries=0)
+    except Exception as e:
+        raise RuntimeError(f"Failed to initialize OpenAI client: {e}")
 
     task_scores: List[float] = []
-    with EmailTriageEnv(base_url=env_base) as env:
-        for task in TASKS:
-            task_scores.append(run_task(client, model_name, env, task))
+    try:
+        with EmailTriageEnv(base_url=env_base) as env:
+            for task in TASKS:
+                try:
+                    task_scores.append(run_task(client, model_name, env, task))
+                except Exception as e:
+                    print(f"Error running task {task['task']}: {e}", flush=True)
+                    task_scores.append(0.0)
 
-    _ = sum(task_scores) / len(task_scores) if task_scores else 0.0
+        _ = sum(task_scores) / len(task_scores) if task_scores else 0.0
+    except Exception as e:
+        raise RuntimeError(f"Failed to connect to environment at {env_base}: {e}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except RuntimeError as e:
+        print(f"Configuration Error: {e}")
+        print("\nRequired environment variables:")
+        print("  - API_BASE_URL: OpenAI-compatible model endpoint")
+        print("  - MODEL_NAME: model identifier")
+        print("  - HF_TOKEN: token required by submission infra")
+        print("  - OPENAI_API_KEY: key used by OpenAI client")
+        print("\nOptional environment variables:")
+        print("  - ENV_BASE_URL: environment server URL (default: http://localhost:8000)")
+        exit(1)
+    except Exception as e:
+        print(f"Runtime Error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
+        exit(1)
