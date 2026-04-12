@@ -14,11 +14,20 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict, List
 
-from openai import OpenAI
+if TYPE_CHECKING:
+    from openai import OpenAI
 
-from email_triage_env.client import EmailTriageEnv
+try:
+    from openai import OpenAI
+except Exception:
+    OpenAI = None  # type: ignore[assignment,misc]
+
+try:
+    from email_triage_env.client import EmailTriageEnv
+except Exception:
+    EmailTriageEnv = None  # type: ignore[assignment,misc]
 
 BENCHMARK = "email_triage_env_v2"
 MAX_STEPS_PER_TASK = 5
@@ -142,9 +151,7 @@ def heuristic_action(email: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def get_model_action(
-    client: OpenAI | None, model: str, email: Dict[str, Any], options: Dict[str, Any]
-) -> Dict[str, Any]:
+def get_model_action(client: Any, model: str, email: Dict[str, Any], options: Dict[str, Any]) -> Dict[str, Any]:
     prompt = {
         "instruction": "Classify this email into the exact output schema.",
         "schema": {
@@ -188,7 +195,7 @@ def get_model_action(
         return heuristic_action(email)
 
 
-def run_task(client: OpenAI | None, model_name: str, env: EmailTriageEnv, task: Dict[str, Any]) -> float:
+def run_task(client: Any, model_name: str, env: Any, task: Dict[str, Any]) -> float:
     task_name = task["task"]
     rewards: List[float] = []
     steps_taken = 0
@@ -245,8 +252,10 @@ def main() -> None:
 
     env_base = os.getenv("ENV_BASE_URL", "http://localhost:8000")
 
-    client: OpenAI | None = None
-    if api_key:
+    client: Any = None
+    if OpenAI is None:
+        print("[WARN] OpenAI package unavailable. Falling back to heuristic policy.", flush=True)
+    elif api_key:
         try:
             client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=5.0, max_retries=2)
         except Exception as e:
@@ -254,6 +263,10 @@ def main() -> None:
             print("[WARN] Falling back to heuristic policy.", flush=True)
     else:
         print("[WARN] OPENAI_API_KEY not set. Falling back to heuristic policy.", flush=True)
+
+    if EmailTriageEnv is None:
+        print("[WARN] EmailTriageEnv client unavailable. Ensure dependencies are installed.", flush=True)
+        return
 
     task_scores: List[float] = []
     try:
