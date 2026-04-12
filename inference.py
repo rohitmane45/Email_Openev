@@ -19,10 +19,7 @@ from typing import TYPE_CHECKING, Any, Dict, List
 if TYPE_CHECKING:
     from openai import OpenAI
 
-try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None  # type: ignore[assignment,misc]
+from openai import OpenAI
 
 try:
     from email_triage_env.client import EmailTriageEnv
@@ -169,8 +166,8 @@ def get_model_action(client: Any, model: str, email: Dict[str, Any], options: Di
         "output": "Return JSON only.",
     }
 
-    if client is None:
-        return heuristic_action(email)
+
+
 
     try:
         completion = client.chat.completions.create(
@@ -252,53 +249,54 @@ def run_task(client: Any, model_name: str, env: Any, task: Dict[str, Any]) -> fl
 
 
 def main() -> None:
-    api_base_url = os.environ.get("API_BASE_URL", "").strip()
-    if not api_base_url:
-        api_base_url = env_or_default("API_BASE_URL", "https://api.openai.com/v1")
-    model_name = env_or_default("MODEL_NAME", "gpt-4o-mini")
-    _ = os.getenv("HF_TOKEN", "").strip()
-    # Platform injects API_KEY; fall back to OPENAI_API_KEY for local dev
-    api_key = os.environ.get("API_KEY", "").strip()
-    if not api_key:
-        api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
-    env_base = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+    # ---- Read platform-injected env vars (REQUIRED by submission validator) ----
+    api_base_url = os.environ["API_BASE_URL"]
+    api_key = os.environ["API_KEY"]
+    model_name = os.environ.get("MODEL_NAME", "gpt-4o-mini")
+    env_base = os.environ.get("ENV_BASE_URL", "http://localhost:8000")
 
     print(f"[INFO] API_BASE_URL={api_base_url}", flush=True)
     print(f"[INFO] MODEL_NAME={model_name}", flush=True)
-    print(f"[INFO] API_KEY={'set' if api_key else 'NOT SET'}", flush=True)
+    print(f"[INFO] API_KEY={'set (' + api_key[:8] + '...)' if api_key else 'NOT SET'}", flush=True)
+    print(f"[INFO] ENV_BASE_URL={env_base}", flush=True)
 
-    client: Any = None
-    if OpenAI is None:
-        print("[WARN] OpenAI package unavailable. Falling back to heuristic policy.", flush=True)
-    elif api_key:
-        try:
-            client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=30.0, max_retries=3)
-            print("[INFO] OpenAI client initialized successfully.", flush=True)
-        except Exception as e:
-            print(f"[WARN] Failed to initialize OpenAI client: {e}", flush=True)
-            print("[WARN] Falling back to heuristic policy.", flush=True)
-    else:
-        print("[WARN] Neither API_KEY nor OPENAI_API_KEY is set. Falling back to heuristic policy.", flush=True)
+    # ---- Initialize OpenAI client (MUST use platform proxy) ----
+    client = OpenAI(
+        base_url=api_base_url,
+        api_key=api_key,
+        timeout=60.0,
+        max_retries=3,
+    )
+    print("[INFO] OpenAI client initialized successfully.", flush=True)
 
+    # ---- Verify connectivity with a tiny test call ----
+    try:
+        test = client.chat.completions.create(
+            model=model_name,
+            temperature=0,
+            max_tokens=5,
+            messages=[{"role": "user", "content": "Say OK"}],
+        )
+        print(f"[INFO] LLM proxy test OK: {test.choices[0].message.content!r}", flush=True)
+    except Exception as e:
+        print(f"[WARN] LLM proxy test failed: {e}", flush=True)
+
+    # ---- Run tasks ----
     if EmailTriageEnv is None:
-        print("[WARN] EmailTriageEnv client unavailable. Ensure dependencies are installed.", flush=True)
+        print("[ERROR] EmailTriageEnv client unavailable. Ensure dependencies are installed.", flush=True)
         return
 
     task_scores: List[float] = []
-    try:
-        with EmailTriageEnv(base_url=env_base) as env:
-            for task in TASKS:
-                try:
-                    task_scores.append(run_task(client, model_name, env, task))
-                except Exception as e:
-                    print(f"Error running task {task['task']}: {e}", flush=True)
-                    task_scores.append(0.0)
+    with EmailTriageEnv(base_url=env_base) as env:
+        for task in TASKS:
+            try:
+                task_scores.append(run_task(client, model_name, env, task))
+            except Exception as e:
+                print(f"Error running task {task['task']}: {e}", flush=True)
+                task_scores.append(0.0)
 
-        _ = sum(task_scores) / len(task_scores) if task_scores else 0.0
-    except Exception as e:
-        print(f"[WARN] Failed to connect to environment at {env_base}: {e}", flush=True)
-        print("[WARN] Ensure your env server is running and reachable on ENV_BASE_URL.", flush=True)
+    avg = sum(task_scores) / len(task_scores) if task_scores else 0.0
+    print(f"[INFO] Final average score: {avg:.4f}", flush=True)
 
 
 if __name__ == "__main__":
