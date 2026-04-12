@@ -177,11 +177,17 @@ def get_model_action(client: Any, model: str, email: Dict[str, Any], options: Di
             model=model,
             temperature=0,
             messages=[
-                {"role": "system", "content": "You are an email triage classifier."},
+                {"role": "system", "content": "You are an email triage classifier. Return valid JSON only, no markdown fences."},
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=True)},
             ],
         )
         text = (completion.choices[0].message.content or "").strip()
+        # Strip markdown code fences if present
+        if text.startswith("```"):
+            lines = text.split("\n")
+            # Remove first line (```json) and last line (```)
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            text = "\n".join(lines).strip()
         parsed = json.loads(text)
 
         return {
@@ -191,7 +197,8 @@ def get_model_action(client: Any, model: str, email: Dict[str, Any], options: Di
             "department": str(parsed.get("department", "customer_support")),
             "response_template": str(parsed.get("response_template", "no_reply_needed")),
         }
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] Model action failed: {e}", flush=True)
         return heuristic_action(email)
 
 
@@ -245,24 +252,34 @@ def run_task(client: Any, model_name: str, env: Any, task: Dict[str, Any]) -> fl
 
 
 def main() -> None:
-    api_base_url = env_or_default("API_BASE_URL", "https://api.openai.com/v1")
+    api_base_url = os.environ.get("API_BASE_URL", "").strip()
+    if not api_base_url:
+        api_base_url = env_or_default("API_BASE_URL", "https://api.openai.com/v1")
     model_name = env_or_default("MODEL_NAME", "gpt-4o-mini")
     _ = os.getenv("HF_TOKEN", "").strip()
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
+    # Platform injects API_KEY; fall back to OPENAI_API_KEY for local dev
+    api_key = os.environ.get("API_KEY", "").strip()
+    if not api_key:
+        api_key = os.getenv("OPENAI_API_KEY", "").strip()
 
     env_base = os.getenv("ENV_BASE_URL", "http://localhost:8000")
+
+    print(f"[INFO] API_BASE_URL={api_base_url}", flush=True)
+    print(f"[INFO] MODEL_NAME={model_name}", flush=True)
+    print(f"[INFO] API_KEY={'set' if api_key else 'NOT SET'}", flush=True)
 
     client: Any = None
     if OpenAI is None:
         print("[WARN] OpenAI package unavailable. Falling back to heuristic policy.", flush=True)
     elif api_key:
         try:
-            client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=5.0, max_retries=2)
+            client = OpenAI(base_url=api_base_url, api_key=api_key, timeout=30.0, max_retries=3)
+            print("[INFO] OpenAI client initialized successfully.", flush=True)
         except Exception as e:
             print(f"[WARN] Failed to initialize OpenAI client: {e}", flush=True)
             print("[WARN] Falling back to heuristic policy.", flush=True)
     else:
-        print("[WARN] OPENAI_API_KEY not set. Falling back to heuristic policy.", flush=True)
+        print("[WARN] Neither API_KEY nor OPENAI_API_KEY is set. Falling back to heuristic policy.", flush=True)
 
     if EmailTriageEnv is None:
         print("[WARN] EmailTriageEnv client unavailable. Ensure dependencies are installed.", flush=True)
