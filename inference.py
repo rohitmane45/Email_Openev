@@ -241,7 +241,8 @@ def run_task(client: Any, model_name: str, env: Any, task: Dict[str, Any]) -> fl
         log_step(step=step, action=action, reward=reward_value, done=done, error=error)
 
     score = sum(rewards) / MAX_TOTAL_REWARD_PER_TASK
-    score = max(0.0, min(1.0, score))
+    # Platform requires scores strictly in (0, 1) — not 0.0 or 1.0
+    score = max(0.001, min(0.999, score))
     success = score >= 0.7
 
     log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
